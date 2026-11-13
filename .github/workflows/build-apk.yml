@@ -1,157 +1,653 @@
-name: Build Spotify Ultimate APK
+package com.spotifyultimate.app
 
-on:
-  workflow_dispatch:
-  push:
-    tags: ["v*"]
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
-permissions:
-  contents: write
+private val Green = Color(0xFF1ED760)
+private val Background = Color(0xFF080A0B)
+private val SurfaceDark = Color(0xFF171A1C)
+private val SurfaceLight = Color(0xFF25292B)
+private val SecondaryText = Color(0xFF9DA4A8)
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+private enum class AppTab(val title: String) {
+    HOME("Início"),
+    SEARCH("Buscar"),
+    LIBRARY("Biblioteca"),
+    EDITIONS("My Editions")
+}
 
-jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
+private data class Edition(
+    val id: Int,
+    val title: String,
+    val description: String,
+    val tracks: Int
+)
 
-    steps:
-      - name: Baixar repositorio
-        uses: actions/checkout@v5
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            SpotifyUltimateApp()
+        }
+    }
+}
 
-      - name: Configurar Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
+@Composable
+private fun SpotifyUltimateApp() {
+    var selectedTab by remember { mutableStateOf(AppTab.HOME) }
+    var appleLook by remember { mutableStateOf(true) }
+    var searchText by remember { mutableStateOf("") }
+    var isPlaying by remember { mutableStateOf(false) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var nextId by remember { mutableIntStateOf(3) }
 
-      - name: Definir versao
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="teste.$GITHUB_RUN_NUMBER"
-          fi
+    var editions by remember {
+        mutableStateOf(
+            listOf(
+                Edition(
+                    1,
+                    "DONDA — Personal Edition",
+                    "Kanye West · Edição personalizada",
+                    27
+                ),
+                Edition(
+                    2,
+                    "Blonde — Late Night Cut",
+                    "Frank Ocean · Edição personalizada",
+                    12
+                )
+            )
+        )
+    }
 
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo ">>> Versao: $VERSION"
+    val accent = if (appleLook) Color(0xFFF1F1F1) else Green
 
-      - name: Configurar Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.13"
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = accent,
+            background = Background,
+            surface = SurfaceDark,
+            onPrimary = Color.Black,
+            onBackground = Color.White,
+            onSurface = Color.White
+        )
+    ) {
+        Scaffold(
+            containerColor = Background,
+            bottomBar = {
+                Column {
+                    MiniPlayer(
+                        isPlaying = isPlaying,
+                        onPlayPause = { isPlaying = !isPlaying },
+                        accent = accent
+                    )
 
-      - name: 1 - Preparar Android SDK
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
+                    NavigationBar(
+                        containerColor = Color(0xFF090B0C),
+                        contentColor = SecondaryText,
+                        tonalElevation = 0.dp
+                    ) {
+                        AppTab.values().forEach { tab ->
+                            val icon = when (tab) {
+                                AppTab.HOME -> Icons.Filled.Home
+                                AppTab.SEARCH -> Icons.Filled.Search
+                                AppTab.LIBRARY -> Icons.Filled.LibraryMusic
+                                AppTab.EDITIONS -> Icons.Filled.Album
+                            }
 
-          SDKM=$(find "$ANDROID_HOME/cmdline-tools" \
-            -name sdkmanager -type f | head -n 1)
+                            NavigationBarItem(
+                                selected = selectedTab == tab,
+                                onClick = { selectedTab = tab },
+                                icon = {
+                                    Icon(icon, contentDescription = tab.title)
+                                },
+                                label = {
+                                    Text(tab.title, fontSize = 10.sp, maxLines = 1)
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = accent,
+                                    selectedTextColor = Color.White,
+                                    unselectedIconColor = SecondaryText,
+                                    unselectedTextColor = SecondaryText,
+                                    indicatorColor = SurfaceLight
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        ) { innerPadding ->
 
-          if [ -z "$SDKM" ]; then
-            echo "ERRO: sdkmanager nao encontrado."
-            exit 1
-          fi
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .background(Background)
+            ) {
+                Header(
+                    appleLook = appleLook,
+                    accent = accent,
+                    onToggleStyle = { appleLook = !appleLook }
+                )
 
-          echo ">>> SDK Manager: $SDKM"
+                when (selectedTab) {
+                    AppTab.HOME -> HomePage(accent)
 
-          yes | "$SDKM" --licenses || true
+                    AppTab.SEARCH -> SearchPage(
+                        query = searchText,
+                        onQueryChange = { searchText = it }
+                    )
 
-          for PKG in \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"; do
+                    AppTab.LIBRARY -> LibraryPage()
 
-            echo ">>> Instalando $PKG"
-            "$SDKM" --install "$PKG"
-          done
+                    AppTab.EDITIONS -> EditionsPage(
+                        editions = editions,
+                        accent = accent,
+                        onCreate = { showCreateDialog = true }
+                    )
+                }
+            }
+        }
 
-      - name: 2 - Localizar projeto Android
-        run: |
-          SETTINGS=$(find . \
-            -path "./.git" -prune -o \
-            -name settings.gradle.kts -print | head -n 1)
+        if (showCreateDialog) {
+            var title by remember { mutableStateOf("") }
 
-          if [ -z "$SETTINGS" ]; then
-            SETTINGS=$(find . \
-              -path "./.git" -prune -o \
-              -name settings.gradle -print | head -n 1)
-          fi
+            AlertDialog(
+                onDismissRequest = { showCreateDialog = false },
+                title = {
+                    Text("Nova edição", fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("Nome da edição") },
+                        singleLine = true
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (title.isNotBlank()) {
+                                editions = listOf(
+                                    Edition(
+                                        nextId,
+                                        title.trim(),
+                                        "Sua coleção personalizada",
+                                        0
+                                    )
+                                ) + editions
 
-          if [ -z "$SETTINGS" ]; then
-            echo "ERRO: settings.gradle nao encontrado."
-            exit 1
-          fi
+                                nextId++
+                            }
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
+                            showCreateDialog = false
+                        }
+                    ) {
+                        Text("Criar")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showCreateDialog = false }
+                    ) {
+                        Text("Cancelar")
+                    }
+                },
+                containerColor = SurfaceDark
+            )
+        }
+    }
+}
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+@Composable
+private fun Header(
+    appleLook: Boolean,
+    accent: Color,
+    onToggleStyle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = 20.dp,
+                end = 16.dp,
+                top = 14.dp,
+                bottom = 12.dp
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column {
+            Text(
+                "SPOTIFY ULTIMATE",
+                color = accent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 1.8.sp
+            )
 
-          echo ">>> Projeto encontrado em $PROJECT_DIR"
-          ls -la "$PROJECT_DIR"
+            Text(
+                if (appleLook) "Music, reimagined."
+                else "Sua música, do seu jeito.",
+                color = SecondaryText,
+                fontSize = 12.sp
+            )
+        }
 
-      - name: 3 - Verificar estrutura
-        run: |
-          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ] && \
-             [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
-            echo "ERRO: modulo app nao encontrado."
-            exit 1
-          fi
+        Surface(
+            color = SurfaceLight,
+            shape = CircleShape,
+            modifier = Modifier.clickable(onClick = onToggleStyle)
+        ) {
+            Row(
+                modifier = Modifier.padding(
+                    horizontal = 13.dp,
+                    vertical = 9.dp
+                ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Filled.Palette,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(15.dp)
+                )
 
-          echo ">>> Estrutura Android encontrada."
+                Spacer(Modifier.width(6.dp))
 
-      - name: 4 - Compilar APK
-        run: |
-          gradle -p "$PROJECT_DIR" \
-            --no-daemon \
-            --stacktrace \
-            assembleDebug
+                Text(
+                    if (appleLook) "Liquid" else "Spotify",
+                    fontSize = 11.sp,
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
 
-      - name: 5 - Preparar APK
-        run: |
-          mkdir -p out
+@Composable
+private fun ColumnScope.HomePage(accent: Color) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f),
+        contentPadding = PaddingValues(
+            start = 18.dp,
+            end = 18.dp,
+            top = 8.dp,
+            bottom = 20.dp
+        ),
+        verticalArrangement = Arrangement.spacedBy(22.dp)
+    ) {
+        item {
+            Column {
+                Text(
+                    "Sua trilha sonora.",
+                    fontSize = 29.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
 
-          APK=$(find "$PROJECT_DIR/app/build/outputs/apk/debug" \
-            -type f -name "*.apk" | head -n 1)
+                Text(
+                    "Tudo o que você ama, em um só lugar.",
+                    color = SecondaryText,
+                    fontSize = 13.sp
+                )
+            }
+        }
 
-          if [ -z "$APK" ] || [ ! -s "$APK" ]; then
-            echo "ERRO: APK nao foi criado."
-            exit 1
-          fi
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                SectionTitle("Acesso rápido")
 
-          cp "$APK" "out/Spotify-Ultimate-$VERSION.apk"
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    QuickTile(
+                        "Sua biblioteca",
+                        "Coleções e favoritos",
+                        Icons.Filled.LibraryMusic,
+                        Modifier.weight(1f)
+                    )
 
-          echo ">>> APK criado:"
-          ls -lh out
+                    QuickTile(
+                        "My Editions",
+                        "Suas versões",
+                        Icons.Filled.Album,
+                        Modifier.weight(1f)
+                    )
+                }
+            }
+        }
 
-          sha256sum out/*.apk
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionTitle("Álbuns para revisitar")
 
-      - name: 6 - Enviar APK
-        uses: actions/upload-artifact@v5
-        with:
-          name: Spotify-Ultimate-${{ env.VERSION }}
-          path: out/*.apk
-          if-no-files-found: error
-          retention-days: 30
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(13.dp)
+                ) {
+                    AlbumCard(
+                        "Currents",
+                        "Tame Impala",
+                        Color(0xFF9A542D),
+                        Color(0xFFE2A36A)
+                    )
 
-      - name: 7 - Publicar Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" \
-            out/Spotify-Ultimate-$VERSION.apk \
-            --title "Spotify Ultimate $VERSION" \
-            --notes "APK de debug do Spotify Ultimate."
+                    AlbumCard(
+                        "Blonde",
+                        "Frank Ocean",
+                        Color(0xFF8D795E),
+                        Color(0xFFE0C9A4)
+                    )
 
-      - name: 8 - Guardar logs
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: Spotify-Ultimate-build-logs
-          path: |
-            ${{ env.PROJECT_DIR }}/app/build/reports/
-          if-no-files-found: ignore
-          
+                    AlbumCard(
+                        "DONDA",
+                        "Kanye West",
+                        Color(0xFF242424),
+                        Color(0xFF777777)
+                    )
+
+                    AlbumCard(
+                        "IGOR",
+                        "Tyler, The Creator",
+                        Color(0xFF6E7B55),
+                        Color(0xFFD3D9A7)
+                    )
+                }
+            }
+        }
+
+        item {
+            Surface(
+                color = SurfaceDark,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(17.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Text(
+                        "Uma nova experiência",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp
+                    )
+
+                    Text(
+                        "O Ultimate está em desenvolvimento. " +
+                            "Esta versão traz navegação, aparência " +
+                            "personalizável e organização de edições.",
+                        color = SecondaryText,
+                        fontSize = 12.sp
+                    )
+
+                    Text(
+                        "Integração Spotify: próxima etapa",
+                        color = accent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.SearchPage(
+    query: String,
+    onQueryChange: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(15.dp)
+    ) {
+        Text(
+            "Buscar",
+            fontSize = 29.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = {
+                Text("Artistas, músicas, álbuns...")
+            },
+            leadingIcon = {
+                Icon(Icons.Filled.Search, contentDescription = null)
+            },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Limpar busca"
+                        )
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(15.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color.White,
+                unfocusedBorderColor = SurfaceLight,
+                focusedContainerColor = SurfaceDark,
+                unfocusedContainerColor = SurfaceDark
+            )
+        )
+
+        if (query.isBlank()) {
+            Text(
+                "Explore sua música",
+                color = SecondaryText,
+                fontSize = 13.sp
+            )
+
+            Text(
+                "A busca real será ativada com a integração oficial do Spotify.",
+                color = SecondaryText,
+                fontSize = 12.sp
+            )
+        } else {
+            Text(
+                "Busca preparada: \"$query\"",
+                color = Color.White,
+                fontSize = 14.sp
+            )
+
+            Text(
+                "Os resultados reais dependem da conexão autorizada com o Spotify.",
+                color = SecondaryText,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.LibraryPage() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            "Sua Biblioteca",
+            fontSize = 29.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Text(
+            "Sua coleção merece um espaço próprio.",
+            color = SecondaryText,
+            fontSize = 13.sp
+        )
+
+        LibraryPlaceholder(
+            Icons.Filled.Favorite,
+            "Músicas curtidas",
+            "Suas faixas favoritas"
+        )
+
+        LibraryPlaceholder(
+            Icons.Filled.Album,
+            "Álbuns",
+            "Álbuns salvos na sua conta"
+        )
+
+        LibraryPlaceholder(
+            Icons.Filled.Person,
+            "Artistas",
+            "Artistas que você acompanha"
+        )
+
+        LibraryPlaceholder(
+            Icons.Filled.QueueMusic,
+            "Playlists",
+            "Suas playlists"
+        )
+
+        Text(
+            "O conteúdo da sua conta será exibido aqui depois da integração autorizada.",
+            color = SecondaryText,
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun ColumnScope.EditionsPage(
+    editions: List<Edition>,
+    accent: Color,
+    onCreate: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(
+                    "My Editions",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    "Seus álbuns, suas regras.",
+                    color = SecondaryText,
+                    fontSize = 12.sp
+                )
+            }
+
+            FilledIconButton(
+                onClick = onCreate,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = accent
+                )
+            ) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = "Criar edição",
+                    tint = Color.Black
+                )
+            }
+        }
+
+        if (editions.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Suas edições aparecerão aqui.",
+                    color = SecondaryText
+                )
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(18.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp)
+            ) {
+                items(
+                    items = editions,
+                    key = { edition -> edition.id }
+                ) { edition ->
+                    EditionCard(edition, accent)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickTile(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.height(82.dp),
+        color = SurfaceDark,
+        shape = RoundedCornerShape(13.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = Green,
+                modifier = Modifier.size(23.dp)
+            )
+
+            Spacer(Modifier.width(9.dp))
+
+            Column {
+                Text(
+                    title,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+              
