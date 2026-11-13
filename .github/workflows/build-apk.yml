@@ -3,45 +3,155 @@ name: Build Spotify Ultimate APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
+      - name: Baixar repositorio
         uses: actions/checkout@v5
 
-      - name: Setup Java 17
+      - name: Configurar Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: 'true'
-          log-accepted-android-sdk-licenses: 'false'
-          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+      - name: Definir versao
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="teste.$GITHUB_RUN_NUMBER"
+          fi
 
-      - name: Setup Gradle
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo ">>> Versao: $VERSION"
+
+      - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.13'
+          gradle-version: "8.13"
 
-      - name: Build APK
-        run: gradle assembleDebug --stacktrace
+      - name: 1 - Preparar Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          SDKM=$(find "$ANDROID_HOME/cmdline-tools" \
+            -name sdkmanager -type f | head -n 1)
+
+          if [ -z "$SDKM" ]; then
+            echo "ERRO: sdkmanager nao encontrado."
+            exit 1
+          fi
+
+          echo ">>> SDK Manager: $SDKM"
+
+          yes | "$SDKM" --licenses || true
+
+          for PKG in \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"; do
+
+            echo ">>> Instalando $PKG"
+            "$SDKM" --install "$PKG"
+          done
+
+      - name: 2 - Localizar projeto Android
+        run: |
+          SETTINGS=$(find . \
+            -path "./.git" -prune -o \
+            -name settings.gradle.kts -print | head -n 1)
+
+          if [ -z "$SETTINGS" ]; then
+            SETTINGS=$(find . \
+              -path "./.git" -prune -o \
+              -name settings.gradle -print | head -n 1)
+          fi
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERRO: settings.gradle nao encontrado."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo ">>> Projeto encontrado em $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
+
+      - name: 3 - Verificar estrutura
+        run: |
+          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ] && \
+             [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "ERRO: modulo app nao encontrado."
+            exit 1
+          fi
+
+          echo ">>> Estrutura Android encontrada."
+
+      - name: 4 - Compilar APK
+        run: |
+          gradle -p "$PROJECT_DIR" \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      - name: 5 - Preparar APK
+        run: |
+          mkdir -p out
+
+          APK=$(find "$PROJECT_DIR/app/build/outputs/apk/debug" \
+            -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK" ] || [ ! -s "$APK" ]; then
+            echo "ERRO: APK nao foi criado."
+            exit 1
+          fi
+
+          cp "$APK" "out/Spotify-Ultimate-$VERSION.apk"
+
+          echo ">>> APK criado:"
+          ls -lh out
+
+          sha256sum out/*.apk
+
+      - name: 6 - Enviar APK
+        uses: actions/upload-artifact@v5
         with:
-          name: Spotify-Ultimate-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Spotify-Ultimate-${{ env.VERSION }}
+          path: out/*.apk
           if-no-files-found: error
+          retention-days: 30
+
+      - name: 7 - Publicar Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            out/Spotify-Ultimate-$VERSION.apk \
+            --title "Spotify Ultimate $VERSION" \
+            --notes "APK de debug do Spotify Ultimate."
+
+      - name: 8 - Guardar logs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: Spotify-Ultimate-build-logs
+          path: |
+            ${{ env.PROJECT_DIR }}/app/build/reports/
+          if-no-files-found: ignore
           
